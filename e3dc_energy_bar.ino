@@ -1,15 +1,15 @@
-
 #include <ESP8266WiFi.h>
 #include <ModbusIP_ESP8266.h>
 #include <Adafruit_NeoPixel.h>
+#include <math.h>
 
 #define LED_PIN   5
 #define NUMPIXELS 72
+#define ANIMATION_INTERVAL 20  // Zeit in Millisekunden zwischen LED-Schritten
 
 Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-union DoubleRegister
-{
+union DoubleRegister {
     int32_t  dr;    // occupies 4 bytes
     uint16_t sr[2]; // occupies 4 bytes
 };
@@ -19,16 +19,15 @@ DoubleRegister batBat;
 DoubleRegister batSolar;
 DoubleRegister batHome;
 
-#define REG_OFFSET                  -1
+#define REG_OFFSET -1
+#define REG_GRID   40074
+#define REG_BAT    40070
+#define REG_SOLAR  40068
+#define REG_HOME   40072
 
-#define REG_GRID                    40074
-#define REG_BAT                     40070
-#define REG_SOLAR                   40068
-#define REG_HOME                    40072
+IPAddress remote(192, 168, 178, 87);  // Modbus Slave IP
 
-IPAddress remote(192, 168, 178, 87);  // Address of Modbus Slave device
-
-ModbusIP mb;  //ModbusIP object
+ModbusIP mb;  // ModbusIP object
 
 int production_grid = 0;
 int production_bat = 0;
@@ -38,29 +37,29 @@ int consumption_grid = 0;
 int consumption_bat = 0;
 int consumption_house = 0;
 
-int divider = 200;
+int divider = 2;
+
+uint32_t leds[NUMPIXELS*100];
+
 
 void setup() {
   Serial.begin(9600);
-
   pixels.begin();
- 
-  WiFi.begin("SSID", "password");
-
-  Serial.println("connecting to WiFi");
+  pixels.setBrightness(15);
   
+  WiFi.begin("SSID", "Password");
+  
+  Serial.println("Connecting to WiFi...");
   while (WiFi.status() != WL_CONNECTED) {
-    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));  // Rote LED während der Verbindung
     pixels.show();
-    delay(250);
+    delay(500);
     pixels.clear();
     pixels.show();
-    delay(250);
-    Serial.print(".");
+    delay(500);
   }
- 
-  Serial.println("");
-  Serial.println("WiFi connected");  
+  
+  Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 
@@ -68,89 +67,96 @@ void setup() {
 }
 
 void loop() {
-  
-  if (mb.isConnected(remote)) {   // Check if connection to Modbus Slave is established
+  if (mb.isConnected(remote)) {  // Check if Modbus Slave is connected
     mb.readHreg(remote, REG_GRID + REG_OFFSET, &batGrid.sr[0], 2);
     mb.readHreg(remote, REG_BAT + REG_OFFSET, &batBat.sr[0], 2);
     mb.readHreg(remote, REG_SOLAR + REG_OFFSET, &batSolar.sr[0], 2);
     mb.readHreg(remote, REG_HOME + REG_OFFSET, &batHome.sr[0], 2);
   } else {
-    mb.connect(remote);           // Try to connect if no connection
+    mb.connect(remote);  // Try to reconnect
   }
-  
+
+  delay(50);  // Short delay between Modbus tasks
+  mb.task();
   delay(50);
-  mb.task();                      // Common local Modbus task
-  delay(50);
-  
-  Serial.print("GRID: ");
-  Serial.println(batGrid.dr);
-  
-  Serial.print("battery: ");
-  Serial.println(batBat.dr);
-  
-  Serial.print("solar: ");
-  Serial.println(batSolar.dr);
 
-  Serial.print("home: ");
-  Serial.println(batHome.dr);
+  updateValues();
+  animateLEDs();
 
-  Serial.println();
+  delay(500);
+}
 
-  if(batGrid.dr < 0){
-    production_grid = 0;
-    consumption_grid = batGrid.dr;
-  }else{
-    production_grid = batGrid.dr;
-    consumption_grid = 0;
-  }
-  
-  if(batBat.dr < 0){
-    production_bat = batBat.dr*-1;
-    consumption_bat = 0;
-  }else{
-    production_bat = 0;
-    consumption_bat = batBat.dr;
-  }
+void updateValues() {
+  // Update the production and consumption values based on Modbus readings
+  production_grid = (batGrid.dr < 0) ? 0 : batGrid.dr;
+  production_bat = (batBat.dr < 0) ? -batBat.dr : 0;
   production_solar = batSolar.dr;
 
+  consumption_grid = (batGrid.dr < 0) ? -batGrid.dr : 0;
+  consumption_bat = (batBat.dr > 0) ? batBat.dr : 0;
   consumption_house = batHome.dr;
+}
 
-  production_grid = production_grid/divider;
-  production_bat = production_bat/divider;
-  production_solar = production_solar/divider;
+void animateLEDs() {
+  float led_production_grid = production_grid / divider;
+  float led_production_bat = production_bat / divider;
+  float led_production_solar = production_solar / divider;
+
+  float led_consumption_grid = consumption_grid / divider;
+  float led_consumption_bat = consumption_bat / divider;
+  float led_consumption_house = consumption_house / divider;
+
+  // Start point for production LEDs (right side)
+  int startpoint = NUMPIXELS * 100 / 2;
+
+  // Animate production values (right side)
+  setSection(startpoint, led_production_grid, pixels.Color(0, 0, 255), true);
+  setSection(startpoint + led_production_grid, led_production_bat, pixels.Color(0, 255, 0), true);
+  setSection(startpoint + led_production_grid + led_production_bat, led_production_solar, pixels.Color(255, 255, 0), true);
+
+  // Start point for consumption LEDs (left side)
+  setSection(startpoint - 1, led_consumption_house, pixels.Color(255, 0, 0), false);
+  setSection(startpoint - 1 - led_consumption_house, led_consumption_bat, pixels.Color(255, 255, 255), false);
+  setSection(startpoint - 1 - led_consumption_house - led_consumption_bat, led_consumption_grid, pixels.Color(255, 0, 255), false);
   
-  consumption_grid = consumption_grid/divider;
-  consumption_bat = consumption_bat/divider;
-  consumption_house = consumption_house/divider;
 
+  displayPixels();
+}
+
+void setSection(int start, int length, uint32_t color, bool forward) {
+  for (int i = 0; i < length; i++) {
+    int index = forward ? start + i : start - i;
+    if (index >= 0 && index < NUMPIXELS * 100) {
+      leds[index] = color;
+    }
+  }
+}
+
+void displayPixels() {
   pixels.clear();
-
-  int startpoint = NUMPIXELS/2;
-
-  for(int i=startpoint; i<startpoint+production_grid; i++){
-    pixels.setPixelColor(i, pixels.Color(0, 0, 3));
+  for (int i = 0; i < NUMPIXELS; i++) {
+    pixels.setPixelColor(i, averageColor(leds, i*100, 100));
   }
-  for(int i=startpoint+production_grid; i< startpoint+production_grid+production_bat; i++){
-    pixels.setPixelColor(i, pixels.Color(0, 3, 0));
-  }
-  for(int i=startpoint+production_grid+production_bat; i< startpoint+production_grid+production_bat+production_solar; i++){
-    pixels.setPixelColor(i, pixels.Color(2, 2, 0));
-  }
-
-  startpoint--;
-
-  for(int i=startpoint; i>startpoint-consumption_house; i--){
-    pixels.setPixelColor(i, pixels.Color(2, 0, 0));
-  }
-  for(int i=startpoint-consumption_house; i> startpoint-consumption_house-consumption_bat; i--){
-    pixels.setPixelColor(i, pixels.Color(2, 2, 2));
-  }
-  for(int i=startpoint-consumption_house-consumption_bat; i> startpoint-consumption_house-consumption_bat-consumption_grid; i--){
-    pixels.setPixelColor(i, pixels.Color(2, 0, 2));
-  }
-
-  
   pixels.show();
-  
-  delay(1000);                     // Pulling interval
+}
+
+uint32_t averageColor(uint32_t colors[], int startIndex, int numColors) {
+    uint32_t sumR = 0;
+    uint32_t sumG = 0;
+    uint32_t sumB = 0;
+
+    // Durchlaufe die Anzahl der Farben ab dem angegebenen Startindex
+    for (int i = startIndex; i < startIndex + numColors; i++) {
+        sumR += (colors[i] >> 16) & 0xFF;  // Extrahiere den Rot-Wert
+        sumG += (colors[i] >> 8) & 0xFF;   // Extrahiere den Grün-Wert
+        sumB += colors[i] & 0xFF;          // Extrahiere den Blau-Wert
+    }
+
+    // Berechne den Durchschnitt
+    uint32_t avgR = sumR / numColors;
+    uint32_t avgG = sumG / numColors;
+    uint32_t avgB = sumB / numColors;
+
+    // Setze den Durchschnitt in einen uint32_t zurück
+    return pixels.Color(avgR, avgG, avgB);
 }
