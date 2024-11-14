@@ -1,7 +1,10 @@
 #include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
 #include <ModbusIP_ESP8266.h>
 #include <Adafruit_NeoPixel.h>
 #include <math.h>
+#include <ArduinoJson.h>
+#include "config.h"
 
 #define LED_PIN   5
 #define NUMPIXELS 72
@@ -37,21 +40,46 @@ int consumption_grid = 0;
 int consumption_bat = 0;
 int consumption_house = 0;
 
+uint32_t production_grid_color = pixels.Color(0, 0, 255);
+uint32_t production_bat_color = pixels.Color(0, 255, 0);
+uint32_t production_solar_color = pixels.Color(255, 255, 0);
+uint32_t consumption_grid_color = pixels.Color(255, 0, 255);
+uint32_t consumption_bat_color = pixels.Color(255, 255, 255);
+uint32_t consumption_house_color = pixels.Color(255, 0, 0);
+
 int divider = 2;
 
 uint32_t leds[NUMPIXELS*100];
+
+HTTPClient sender;
+WiFiClientSecure wifiClient;
 
 
 void setup() {
   Serial.begin(9600);
   pixels.begin();
-  pixels.setBrightness(15);
+  pixels.setBrightness(10);
   
-  WiFi.begin("SSID", "Password");
+  WiFi.begin(ssid, password);
   
   Serial.println("Connecting to WiFi...");
   while (WiFi.status() != WL_CONNECTED) {
-    pixels.setPixelColor(0, pixels.Color(255, 0, 0));  // Rote LED während der Verbindung
+    pixels.setPixelColor(0, production_grid_color);
+    pixels.show();
+    delay(50);
+    pixels.setPixelColor(1, production_bat_color);
+    pixels.show();
+    delay(50);
+    pixels.setPixelColor(2, production_solar_color);
+    pixels.show();
+    delay(50);
+    pixels.setPixelColor(3, consumption_grid_color);
+    pixels.show();
+    delay(50);
+    pixels.setPixelColor(4, consumption_bat_color);
+    pixels.show();
+    delay(50);
+    pixels.setPixelColor(5, consumption_house_color);
     pixels.show();
     delay(500);
     pixels.clear();
@@ -62,6 +90,8 @@ void setup() {
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+
+  getEnergyPrices();
 
   mb.client();
 }
@@ -84,6 +114,41 @@ void loop() {
   animateLEDs();
 
   delay(500);
+}
+
+void getEnergyPrices() {
+  wifiClient.setInsecure();
+  if (sender.begin(wifiClient, url)) {
+    int httpCode = sender.GET();
+    if (httpCode > 0) {
+      if (httpCode == HTTP_CODE_OK) {
+        String payload = sender.getString();
+        Serial.println(payload);
+        parseJson(payload);
+      }
+    }else{
+      Serial.printf("HTTP-Error: ", sender.errorToString(httpCode).c_str());
+    }
+  }
+}
+
+void parseJson(String payload) {
+  DynamicJsonDocument doc(2048);
+  deserializeJson(doc, payload);
+  
+  for (JsonObject obj : doc.as<JsonArray>()) {
+    String start = obj["start"];
+    String end = obj["end"];
+    float price = obj["price"];
+    
+    Serial.print("Start: ");
+    Serial.println(start);
+    Serial.print("End: ");
+    Serial.println(end);
+    Serial.print("Price: ");
+    Serial.println(price);
+    Serial.println();
+  }
 }
 
 void updateValues() {
@@ -109,15 +174,20 @@ void animateLEDs() {
   // Start point for production LEDs (right side)
   int startpoint = NUMPIXELS * 100 / 2;
 
+  // flush led array
+  for (int i = 0; i < NUMPIXELS * 100; i++) {
+    leds[i] = 0;
+  }
+
   // Animate production values (right side)
-  setSection(startpoint, led_production_grid, pixels.Color(0, 0, 255), true);
-  setSection(startpoint + led_production_grid, led_production_bat, pixels.Color(0, 255, 0), true);
-  setSection(startpoint + led_production_grid + led_production_bat, led_production_solar, pixels.Color(255, 255, 0), true);
+  setSection(startpoint, led_production_grid, production_grid_color, true);
+  setSection(startpoint + led_production_grid, led_production_bat, production_bat_color, true);
+  setSection(startpoint + led_production_grid + led_production_bat, led_production_solar, production_solar_color, true);
 
   // Start point for consumption LEDs (left side)
-  setSection(startpoint - 1, led_consumption_house, pixels.Color(255, 0, 0), false);
-  setSection(startpoint - 1 - led_consumption_house, led_consumption_bat, pixels.Color(255, 255, 255), false);
-  setSection(startpoint - 1 - led_consumption_house - led_consumption_bat, led_consumption_grid, pixels.Color(255, 0, 255), false);
+  setSection(startpoint - 1, led_consumption_house, consumption_house_color, false);
+  setSection(startpoint - 1 - led_consumption_house, led_consumption_bat, consumption_bat_color, false);
+  setSection(startpoint - 1 - led_consumption_house - led_consumption_bat, led_consumption_grid, consumption_grid_color, false);
   
 
   displayPixels();
