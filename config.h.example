@@ -3,6 +3,5 @@
 
 const char* ssid = "your ssid";
 const char* password = "your password";
-const char* url = "https://www.energyforecast.de/api/v1/predictions/next_96_hours?token=your_token";
 
 #endif

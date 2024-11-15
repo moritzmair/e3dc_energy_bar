@@ -1,9 +1,7 @@
 #include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
 #include <ModbusIP_ESP8266.h>
 #include <Adafruit_NeoPixel.h>
 #include <math.h>
-#include <ArduinoJson.h>
 #include "config.h"
 
 #define LED_PIN   5
@@ -51,10 +49,6 @@ int divider = 2;
 
 uint32_t leds[NUMPIXELS*100];
 
-HTTPClient sender;
-WiFiClientSecure wifiClient;
-
-
 void setup() {
   Serial.begin(9600);
   pixels.begin();
@@ -91,8 +85,6 @@ void setup() {
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 
-  getEnergyPrices();
-
   mb.client();
 }
 
@@ -114,41 +106,6 @@ void loop() {
   animateLEDs();
 
   delay(500);
-}
-
-void getEnergyPrices() {
-  wifiClient.setInsecure();
-  if (sender.begin(wifiClient, url)) {
-    int httpCode = sender.GET();
-    if (httpCode > 0) {
-      if (httpCode == HTTP_CODE_OK) {
-        String payload = sender.getString();
-        Serial.println(payload);
-        parseJson(payload);
-      }
-    }else{
-      Serial.printf("HTTP-Error: ", sender.errorToString(httpCode).c_str());
-    }
-  }
-}
-
-void parseJson(String payload) {
-  DynamicJsonDocument doc(2048);
-  deserializeJson(doc, payload);
-  
-  for (JsonObject obj : doc.as<JsonArray>()) {
-    String start = obj["start"];
-    String end = obj["end"];
-    float price = obj["price"];
-    
-    Serial.print("Start: ");
-    Serial.println(start);
-    Serial.print("End: ");
-    Serial.println(end);
-    Serial.print("Price: ");
-    Serial.println(price);
-    Serial.println();
-  }
 }
 
 void updateValues() {
